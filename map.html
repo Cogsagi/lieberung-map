@@ -83,9 +83,26 @@
     .map-wrap.placing { cursor: crosshair; }
     .map-wrap img {
       display: block;
-      max-width: 100%;
       height: auto;
       user-select: none;
+    }
+
+    /* ── Zoom controls ── */
+    .zoom-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .zoom-label {
+      color: #8a7a52;
+      font-size: 0.75rem;
+      min-width: 38px;
+      text-align: center;
+    }
+    .btn-icon {
+      padding: 5px 9px;
+      font-size: 1rem;
+      line-height: 1;
     }
 
     /* ── Pins ── */
@@ -207,11 +224,17 @@
   <span class="toolbar-title">Lieberung Map</span>
   <button class="btn btn-primary" id="btnPlacePin" onclick="togglePlace()">+ Place Pin</button>
   <span class="map-hint" id="placeHint" style="display:none">Click the map to drop a pin&hellip;</span>
+  <div class="zoom-group">
+    <button class="btn btn-icon" onclick="zoomBy(-0.25)" title="Zoom out">&#8722;</button>
+    <span class="zoom-label" id="zoomLabel">100%</span>
+    <button class="btn btn-icon" onclick="zoomBy(+0.25)" title="Zoom in">&#43;</button>
+    <button class="btn" onclick="zoomReset()" title="Reset zoom" style="padding:5px 8px;font-size:0.75rem">&#8635;</button>
+  </div>
   <button class="btn" onclick="openConfig()" title="Notion settings">&#9881;</button>
 </div>
 
 <!-- ── Map ── -->
-<div class="map-scroll">
+<div class="map-scroll" id="mapScroll">
   <div class="map-wrap" id="mapWrap">
     <img src="Empire_Map.jpg" alt="Empire Map" id="mapImg" draggable="false"
          onerror="this.style.cssText='width:900px;height:600px;background:#0d0b08;display:block'">
@@ -372,6 +395,7 @@ let _placing  = false;
 let _pendingXY = null;
 let _editPin   = null;        // full pin object when editing
 let _cfgRequired = false;
+let _zoom     = 1.0;
 
 const PIN_ICONS = {
   City: '🏰', Town: '🏘', Dungeon: '💀', Battle: '⚔️',
@@ -392,12 +416,63 @@ function setStatus(msg, type = '') {
   el.innerHTML = msg;
 }
 
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+
+const ZOOM_MIN  = 0.25;
+const ZOOM_MAX  = 5.0;
+
+function applyZoom() {
+  const scroll = document.getElementById('mapScroll');
+  const img    = document.getElementById('mapImg');
+  img.style.width    = Math.round(scroll.clientWidth * _zoom) + 'px';
+  img.style.maxWidth = 'none';
+  document.getElementById('zoomLabel').textContent = Math.round(_zoom * 100) + '%';
+}
+
+function zoomBy(delta, pivotX, pivotY) {
+  const scroll   = document.getElementById('mapScroll');
+  const oldZoom  = _zoom;
+  _zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, _zoom + delta));
+  if (_zoom === oldZoom) return;
+
+  // Keep the pivot point (default: centre of viewport) stable in scroll space
+  const cx = pivotX !== undefined ? pivotX : scroll.clientWidth  / 2;
+  const cy = pivotY !== undefined ? pivotY : scroll.clientHeight / 2;
+  const ratio = _zoom / oldZoom;
+  scroll.scrollLeft = (scroll.scrollLeft + cx) * ratio - cx;
+  scroll.scrollTop  = (scroll.scrollTop  + cy) * ratio - cy;
+
+  applyZoom();
+}
+
+function zoomReset() {
+  _zoom = 1.0;
+  const scroll = document.getElementById('mapScroll');
+  scroll.scrollLeft = 0;
+  scroll.scrollTop  = 0;
+  applyZoom();
+}
+
+// Scroll-wheel zoom
+document.getElementById('mapScroll').addEventListener('wheel', function(e) {
+  if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && e.deltaMode === 0) return; // allow plain scroll
+  e.preventDefault();
+  const rect  = this.getBoundingClientRect();
+  const pivotX = e.clientX - rect.left;
+  const pivotY = e.clientY - rect.top;
+  const delta = e.deltaY < 0 ? 0.15 : -0.15;
+  zoomBy(delta, pivotX, pivotY);
+}, { passive: false });
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function init() {
-  if (_cfg.imgUrl) {
-    document.getElementById('mapImg').src = _cfg.imgUrl;
-  }
+  const img = document.getElementById('mapImg');
+  if (_cfg.imgUrl) img.src = _cfg.imgUrl;
+
+  // Apply initial zoom once image dimensions are known
+  img.addEventListener('load', applyZoom, { once: true });
+  if (img.complete && img.naturalWidth) applyZoom();
 
   if (!_cfg.token || !_cfg.dbId) {
     _cfgRequired = true;
@@ -587,7 +662,7 @@ async function saveConfig() {
   _cfg = { token, dbId, imgUrl };
   saveCfg(_cfg);
 
-  if (imgUrl) document.getElementById('mapImg').src = imgUrl;
+  if (imgUrl) { document.getElementById('mapImg').src = imgUrl; applyZoom(); }
 
   closeCfg();
   _cfgRequired = false;
