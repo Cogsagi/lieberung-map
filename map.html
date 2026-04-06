@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lieberung Map</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1510;
+      color: #c8b98a;
+      font-family: 'Palatino Linotype', Palatino, Georgia, serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      background: #0d0b08;
+      border-bottom: 2px solid #7a5c2e;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .toolbar-title {
+      color: #d4aa5a;
+      font-size: 1rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-right: auto;
+    }
+    .map-hint { color: #d4aa5a; font-style: italic; font-size: 0.82rem; }
+
+    /* ── Buttons ── */
+    .btn {
+      background: #221a0e;
+      border: 1px solid #5a4a28;
+      border-radius: 2px;
+      color: #c8b98a;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.82rem;
+      padding: 5px 12px;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .btn:hover { background: #302410; border-color: #d4aa5a; color: #d4aa5a; }
+    .btn-primary { background: #2e2000; border-color: #d4aa5a; color: #d4aa5a; }
+    .btn-primary:hover { background: #3e2e08; }
+    .btn-danger { border-color: #7a3020; color: #b85040; }
+    .btn-danger:hover { background: #321008; border-color: #b85040; color: #d06050; }
+
+    /* ── Status bar ── */
+    .status-bar {
+      background: #0d0b08;
+      border-top: 1px solid #3a2c18;
+      color: #6a5a3a;
+      font-size: 0.75rem;
+      font-style: italic;
+      padding: 4px 14px;
+      flex-shrink: 0;
+    }
+    .status-bar.err { color: #b85040; }
+    .status-bar.ok  { color: #5a8a3a; }
+
+    /* ── Map scroll area ── */
+    .map-scroll {
+      flex: 1;
+      overflow: auto;
+      border: none;
+    }
+    .map-wrap {
+      cursor: default;
+      display: inline-block;
+      position: relative;
+      min-width: 100%;
+      min-height: 100%;
+    }
+    .map-wrap.placing { cursor: crosshair; }
+    .map-wrap img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      user-select: none;
+    }
+
+    /* ── Pins ── */
+    .map-pin {
+      cursor: pointer;
+      filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9));
+      font-size: 22px;
+      left: 0; top: 0;
+      line-height: 1;
+      position: absolute;
+      transform: translate(-50%, -100%);
+      transition: transform 0.12s;
+      user-select: none;
+    }
+    .map-pin:hover { transform: translate(-50%, -100%) scale(1.25); }
+
+    /* ── Overlay / Modal ── */
+    .overlay {
+      align-items: center;
+      background: rgba(0,0,0,0.85);
+      bottom: 0; left: 0; right: 0; top: 0;
+      display: flex;
+      justify-content: center;
+      position: fixed;
+      z-index: 100;
+    }
+    .modal {
+      background: #1a1510;
+      border: 1px solid #7a5c2e;
+      border-radius: 3px;
+      max-height: 90vh;
+      max-width: 520px;
+      overflow-y: auto;
+      padding: 24px;
+      width: 92%;
+    }
+    .modal h2 {
+      color: #d4aa5a;
+      font-size: 0.95rem;
+      letter-spacing: 2px;
+      margin-bottom: 18px;
+      text-transform: uppercase;
+    }
+    .form-group { margin-bottom: 12px; }
+    .form-group label {
+      color: #8a7a52;
+      display: block;
+      font-size: 0.72rem;
+      letter-spacing: 1px;
+      margin-bottom: 5px;
+      text-transform: uppercase;
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      background: #110e0a;
+      border: 1px solid #3a2c18;
+      border-radius: 2px;
+      color: #c8b98a;
+      font-family: inherit;
+      font-size: 0.85rem;
+      padding: 7px 10px;
+      width: 100%;
+    }
+    .form-group textarea { min-height: 80px; resize: vertical; }
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      border-color: #7a5c2e;
+      outline: none;
+    }
+    .field-error { border-color: #b85040 !important; }
+    .modal-footer {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 18px;
+    }
+    .modal-footer .btn-danger { margin-right: auto; }
+
+    /* ── Config screen ── */
+    .config-note {
+      background: #110e0a;
+      border: 1px solid #3a2c18;
+      border-radius: 2px;
+      color: #6a5a3a;
+      font-size: 0.78rem;
+      line-height: 1.6;
+      margin-bottom: 14px;
+      padding: 10px 12px;
+    }
+    .config-note a { color: #d4aa5a; }
+
+    /* ── Loading spinner ── */
+    .spinner {
+      border: 2px solid #3a2c18;
+      border-top-color: #d4aa5a;
+      border-radius: 50%;
+      display: inline-block;
+      height: 14px;
+      width: 14px;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { height: 6px; width: 6px; }
+    ::-webkit-scrollbar-track { background: #0d0b08; }
+    ::-webkit-scrollbar-thumb { background: #4a3820; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #7a5c2e; }
+  </style>
+</head>
+<body>
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+  <span class="toolbar-title">Lieberung Map</span>
+  <button class="btn btn-primary" id="btnPlacePin" onclick="togglePlace()">+ Place Pin</button>
+  <span class="map-hint" id="placeHint" style="display:none">Click the map to drop a pin&hellip;</span>
+  <button class="btn" onclick="openConfig()" title="Notion settings">&#9881;</button>
+</div>
+
+<!-- ── Map ── -->
+<div class="map-scroll">
+  <div class="map-wrap" id="mapWrap">
+    <img src="Empire_Map.jpg" alt="Empire Map" id="mapImg" draggable="false"
+         onerror="this.style.cssText='width:900px;height:600px;background:#0d0b08;display:block'">
+    <div id="mapPins"></div>
+  </div>
+</div>
+
+<!-- ── Status bar ── -->
+<div class="status-bar" id="statusBar">Initialising&hellip;</div>
+
+<!-- ── Pin Modal ── -->
+<div class="overlay" id="pinOverlay" style="display:none" onclick="if(event.target===this)closePinModal()">
+  <div class="modal">
+    <h2 id="pinModalTitle"></h2>
+    <div id="pinModalBody"></div>
+    <div class="modal-footer" id="pinModalFooter"></div>
+  </div>
+</div>
+
+<!-- ── Config Modal ── -->
+<div class="overlay" id="cfgOverlay" style="display:none" onclick="if(event.target===this&&!_cfgRequired)closeCfg()">
+  <div class="modal">
+    <h2>Notion Configuration</h2>
+    <div class="config-note">
+      Create a Notion integration at <strong>notion.so/my-integrations</strong>, share the
+      Map Pins database with it, then paste the values below. These are saved in your
+      browser&rsquo;s localStorage and never sent anywhere except the Notion API.
+    </div>
+    <div class="form-group">
+      <label>Integration Token (secret_&hellip;)</label>
+      <input id="cfgToken" type="password" placeholder="secret_xxxx" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>Map Pins Database ID</label>
+      <input id="cfgDb" type="text" placeholder="32-char hex or UUID" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>Map Image URL <span style="color:#6a5a3a;font-size:0.7rem">(optional — leave blank to use Empire_Map.jpg)</span></label>
+      <input id="cfgImg" type="text" placeholder="https://…">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="cfgCancelBtn" onclick="closeCfg()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveConfig()">Save &amp; Connect</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const CFG_KEY = 'llmap_cfg';
+
+function loadCfg() {
+  try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch { return {}; }
+}
+function saveCfg(cfg) { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+
+// ── Notion API ────────────────────────────────────────────────────────────────
+
+const NOTION_BASE = 'https://api.notion.com/v1';
+const NOTION_VER  = '2022-06-28';
+
+function notionHeaders(token) {
+  return {
+    'Authorization': 'Bearer ' + token,
+    'Notion-Version': NOTION_VER,
+    'Content-Type': 'application/json',
+  };
+}
+
+async function notionFetch(path, options, token) {
+  const res = await fetch(NOTION_BASE + path, {
+    ...options,
+    headers: notionHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// Load all pins from the database (queries pages, handles pagination)
+async function notionLoadPins(token, dbId) {
+  const pins = [];
+  let cursor = undefined;
+  do {
+    const body = cursor ? { start_cursor: cursor } : {};
+    const data = await notionFetch(
+      `/databases/${dbId}/query`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token
+    );
+    for (const page of data.results) {
+      const p = page.properties;
+      pins.push({
+        _id: page.id,
+        name:  richTextVal(p.Name?.title),
+        ptype: p.Type?.select?.name || 'Other',
+        notes: richTextVal(p.Notes?.rich_text),
+        x:     p.X?.number ?? 0,
+        y:     p.Y?.number ?? 0,
+      });
+    }
+    cursor = data.has_more ? data.next_cursor : undefined;
+  } while (cursor);
+  return pins;
+}
+
+function richTextVal(arr) {
+  return (arr || []).map(t => t.plain_text).join('');
+}
+
+// Create a new pin page
+async function notionCreatePin(token, dbId, pin) {
+  return notionFetch('/pages', {
+    method: 'POST',
+    body: JSON.stringify({
+      parent: { database_id: dbId },
+      properties: pinToProps(pin),
+    }),
+  }, token);
+}
+
+// Update an existing pin page
+async function notionUpdatePin(token, pageId, pin) {
+  return notionFetch(`/pages/${pageId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ properties: pinToProps(pin) }),
+  }, token);
+}
+
+// Archive (delete) a pin page
+async function notionDeletePin(token, pageId) {
+  return notionFetch(`/pages/${pageId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ archived: true }),
+  }, token);
+}
+
+function pinToProps(pin) {
+  return {
+    Name:  { title:      [{ text: { content: pin.name  } }] },
+    Type:  { select:     { name: pin.ptype } },
+    Notes: { rich_text:  [{ text: { content: pin.notes || '' } }] },
+    X:     { number: pin.x },
+    Y:     { number: pin.y },
+  };
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let _cfg      = loadCfg();
+let _pins     = [];           // [{_id, name, ptype, notes, x, y}]
+let _placing  = false;
+let _pendingXY = null;
+let _editPin   = null;        // full pin object when editing
+let _cfgRequired = false;
+
+const PIN_ICONS = {
+  City: '🏰', Town: '🏘', Dungeon: '💀', Battle: '⚔️',
+  Camp: '⛺', Ruin: '🗿', POI: '📍', Other: '📌',
+};
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function setStatus(msg, type = '') {
+  const el = document.getElementById('statusBar');
+  el.className = 'status-bar' + (type ? ' ' + type : '');
+  el.innerHTML = msg;
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+async function init() {
+  if (_cfg.imgUrl) {
+    document.getElementById('mapImg').src = _cfg.imgUrl;
+  }
+
+  if (!_cfg.token || !_cfg.dbId) {
+    _cfgRequired = true;
+    document.getElementById('cfgCancelBtn').style.display = 'none';
+    setStatus('Configure Notion to load pins.', 'err');
+    openConfig();
+    return;
+  }
+
+  setStatus('<span class="spinner"></span>Loading pins from Notion&hellip;');
+  try {
+    _pins = await notionLoadPins(_cfg.token, _cfg.dbId);
+    renderPins();
+    setStatus(`${_pins.length} pin${_pins.length !== 1 ? 's' : ''} loaded.`, 'ok');
+  } catch (e) {
+    setStatus('Failed to load pins: ' + esc(e.message), 'err');
+  }
+}
+
+// ── Place mode ────────────────────────────────────────────────────────────────
+
+function togglePlace() {
+  _placing = !_placing;
+  document.getElementById('btnPlacePin').textContent = _placing ? 'Cancel' : '+ Place Pin';
+  document.getElementById('placeHint').style.display = _placing ? 'inline' : 'none';
+  document.getElementById('mapWrap').classList.toggle('placing', _placing);
+}
+
+document.getElementById('mapWrap').addEventListener('click', function(e) {
+  if (!_placing) return;
+  if (e.target.classList.contains('map-pin')) return;
+  const img = document.getElementById('mapImg');
+  const r   = img.getBoundingClientRect();
+  _pendingXY = {
+    x: ((e.clientX - r.left) / r.width)  * 100,
+    y: ((e.clientY - r.top)  / r.height) * 100,
+  };
+  _editPin = null;
+  togglePlace();
+  openPinModal(null);
+});
+
+// ── Pin Modal ─────────────────────────────────────────────────────────────────
+
+function openPinModal(pin, viewOnly = false) {
+  _editPin = pin;
+
+  document.getElementById('pinModalTitle').textContent =
+    viewOnly ? (pin?.name || 'Pin') : (pin ? 'Edit Pin' : 'New Pin');
+
+  if (viewOnly) {
+    document.getElementById('pinModalBody').innerHTML = `
+      <div class="form-group"><label>Name</label>
+        <input readonly value="${esc(pin.name)}" style="opacity:.65"></div>
+      <div class="form-group"><label>Type</label>
+        <input readonly value="${esc(pin.ptype)}" style="opacity:.65"></div>
+      <div class="form-group"><label>Notes</label>
+        <textarea readonly style="opacity:.65">${esc(pin.notes)}</textarea></div>`;
+    document.getElementById('pinModalFooter').innerHTML = `
+      <button class="btn btn-danger" onclick="doDeletePin()">Delete</button>
+      <button class="btn" onclick="closePinModal()">Close</button>
+      <button class="btn btn-primary" onclick="openPinModal(_editPin,false)">Edit</button>`;
+  } else {
+    const typeOpts = Object.keys(PIN_ICONS).map(t =>
+      `<option${pin?.ptype === t ? ' selected' : ''}>${t}</option>`).join('');
+    document.getElementById('pinModalBody').innerHTML = `
+      <div class="form-group"><label>Name *</label>
+        <input id="pm-name" type="text" value="${esc(pin?.name ?? '')}"></div>
+      <div class="form-group"><label>Type</label>
+        <select id="pm-type">${typeOpts}</select></div>
+      <div class="form-group"><label>Notes</label>
+        <textarea id="pm-notes">${esc(pin?.notes ?? '')}</textarea></div>`;
+    document.getElementById('pinModalFooter').innerHTML = `
+      ${pin ? `<button class="btn btn-danger" onclick="doDeletePin()">Delete</button>` : ''}
+      <button class="btn" onclick="closePinModal()">Cancel</button>
+      <button class="btn btn-primary" id="btnSavePin" onclick="doSavePin()">Save</button>`;
+  }
+
+  document.getElementById('pinOverlay').style.display = 'flex';
+}
+
+function closePinModal() {
+  document.getElementById('pinOverlay').style.display = 'none';
+  _pendingXY = null;
+  _editPin   = null;
+}
+
+async function doSavePin() {
+  const name  = document.getElementById('pm-name')?.value.trim();
+  const ptype = document.getElementById('pm-type')?.value || 'Other';
+  const notes = document.getElementById('pm-notes')?.value.trim() ?? '';
+
+  if (!name) {
+    document.getElementById('pm-name').classList.add('field-error');
+    return;
+  }
+
+  const btn = document.getElementById('btnSavePin');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  setStatus('<span class="spinner"></span>Saving…');
+
+  try {
+    if (_editPin) {
+      const updated = { ..._editPin, name, ptype, notes };
+      await notionUpdatePin(_cfg.token, _editPin._id, updated);
+      const i = _pins.findIndex(p => p._id === _editPin._id);
+      if (i !== -1) _pins[i] = updated;
+    } else if (_pendingXY) {
+      const res = await notionCreatePin(_cfg.token, _cfg.dbId, {
+        name, ptype, notes, x: _pendingXY.x, y: _pendingXY.y,
+      });
+      _pins.push({
+        _id: res.id,
+        name, ptype, notes, x: _pendingXY.x, y: _pendingXY.y,
+      });
+    }
+    closePinModal();
+    renderPins();
+    setStatus(`${_pins.length} pin${_pins.length !== 1 ? 's' : ''} loaded.`, 'ok');
+  } catch (e) {
+    setStatus('Save failed: ' + esc(e.message), 'err');
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }
+}
+
+async function doDeletePin() {
+  if (!confirm('Remove this pin?')) return;
+  const pin = _editPin;
+  closePinModal();
+  setStatus('<span class="spinner"></span>Deleting…');
+  try {
+    await notionDeletePin(_cfg.token, pin._id);
+    _pins = _pins.filter(p => p._id !== pin._id);
+    renderPins();
+    setStatus(`${_pins.length} pin${_pins.length !== 1 ? 's' : ''} loaded.`, 'ok');
+  } catch (e) {
+    setStatus('Delete failed: ' + esc(e.message), 'err');
+  }
+}
+
+// ── Render pins ───────────────────────────────────────────────────────────────
+
+function renderPins() {
+  document.getElementById('mapPins').innerHTML = _pins.map(p => {
+    const icon = PIN_ICONS[p.ptype] || '📌';
+    return `<span class="map-pin" title="${esc(p.name)}"
+      style="left:${p.x}%;top:${p.y}%"
+      data-id="${esc(p._id)}"
+    >${icon}</span>`;
+  }).join('');
+
+  document.getElementById('mapPins').querySelectorAll('.map-pin').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      const pin = _pins.find(p => p._id === el.dataset.id);
+      if (pin) openPinModal(pin, true);
+    });
+  });
+}
+
+// ── Config Modal ──────────────────────────────────────────────────────────────
+
+function openConfig() {
+  const cfg = loadCfg();
+  document.getElementById('cfgToken').value = cfg.token || '';
+  document.getElementById('cfgDb').value    = cfg.dbId  || '';
+  document.getElementById('cfgImg').value   = cfg.imgUrl || '';
+  document.getElementById('cfgOverlay').style.display = 'flex';
+}
+
+function closeCfg() {
+  document.getElementById('cfgOverlay').style.display = 'none';
+}
+
+async function saveConfig() {
+  const token  = document.getElementById('cfgToken').value.trim();
+  const dbId   = document.getElementById('cfgDb').value.trim().replace(/-/g, '');
+  const imgUrl = document.getElementById('cfgImg').value.trim();
+
+  if (!token || !dbId) {
+    alert('Both token and database ID are required.');
+    return;
+  }
+
+  _cfg = { token, dbId, imgUrl };
+  saveCfg(_cfg);
+
+  if (imgUrl) document.getElementById('mapImg').src = imgUrl;
+
+  closeCfg();
+  _cfgRequired = false;
+  document.getElementById('cfgCancelBtn').style.display = '';
+
+  setStatus('<span class="spinner"></span>Connecting to Notion…');
+  try {
+    _pins = await notionLoadPins(token, dbId);
+    renderPins();
+    setStatus(`${_pins.length} pin${_pins.length !== 1 ? 's' : ''} loaded.`, 'ok');
+  } catch (e) {
+    setStatus('Connection failed: ' + esc(e.message), 'err');
+  }
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+init();
+</script>
+</body>
+</html>
