@@ -250,6 +250,43 @@
     ::-webkit-scrollbar-track { background: #0d0b08; }
     ::-webkit-scrollbar-thumb { background: #4a3820; border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: #7a5c2e; }
+
+    /* ── Hover Tooltip ── */
+    #mapTooltip {
+      background: rgba(13,11,8,0.96);
+      border: 1px solid #7a5c2e;
+      border-radius: 3px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.75);
+      color: #c8b98a;
+      font-family: 'Palatino Linotype', Palatino, Georgia, serif;
+      font-size: 0.78rem;
+      max-width: 240px;
+      opacity: 0;
+      padding: 8px 11px;
+      pointer-events: none;
+      position: fixed;
+      transform: translateY(4px);
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      z-index: 200;
+    }
+    #mapTooltip.visible { opacity: 1; transform: translateY(0); }
+    .tooltip-name { color: #d4aa5a; font-size: 0.92rem; font-weight: bold; margin-bottom: 2px; }
+    .tooltip-type { color: #8a7a52; font-size: 0.72rem; letter-spacing: 0.5px; margin-bottom: 4px; text-transform: uppercase; }
+    .tooltip-notes { color: #a09070; font-size: 0.75rem; line-height: 1.45; }
+    .tooltip-dot { border: 1.5px solid rgba(255,255,255,0.7); border-radius: 50%; display: inline-block; height: 10px; margin-right: 5px; vertical-align: middle; width: 10px; }
+
+    /* ── Distance Ruler ── */
+    #rulerSvg { height:100%; left:0; pointer-events:none; position:absolute; top:0; width:100%; z-index:20; }
+    .btn-ruler-active { background:#2e1800; border-color:#F59E0B; color:#F59E0B; }
+    .btn-ruler-active:hover { background:#3e2200; border-color:#F59E0B; color:#F59E0B; }
+
+    /* ── Session Pin ── */
+    @keyframes pulse-ring {
+      0%,100% { box-shadow: 0 2px 10px rgba(0,0,0,0.80), 0 0 0 1.5px rgba(0,0,0,0.35); }
+      50%      { box-shadow: 0 2px 10px rgba(0,0,0,0.80), 0 0 0 1.5px rgba(0,0,0,0.35),
+                             0 0 18px 6px rgba(255,220,80,0.70); }
+    }
+    .pin-bubble.session-pin { animation: pulse-ring 1.8s ease-in-out infinite; }
   </style>
 </head>
 <body>
@@ -259,6 +296,8 @@
   <span class="toolbar-title">Lieberung Map</span>
   <button class="btn btn-primary" id="btnPlacePin" onclick="togglePlace()">+ Place Pin</button>
   <span class="map-hint" id="placeHint" style="display:none">Click the map to drop a pin&hellip;</span>
+  <button class="btn btn-icon" id="btnRuler" onclick="toggleRuler()" title="Measure distance">📏</button>
+  <button class="btn btn-icon" onclick="exportPNG()" title="Export map as PNG">💾</button>
   <div class="zoom-group">
     <button class="btn btn-icon" onclick="zoomBy(-0.25)" title="Zoom out">&#8722;</button>
     <span class="zoom-label" id="zoomLabel">100%</span>
@@ -274,6 +313,8 @@
     <img src="Empire_Map.jpg" alt="Empire Map" id="mapImg" draggable="false"
          onerror="this.style.cssText='width:900px;height:600px;background:#0d0b08;display:block'">
     <div id="mapPins"></div>
+    <svg id="rulerSvg" viewBox="0 0 100 100" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" style="display:none"></svg>
   </div>
 </div>
 
@@ -316,6 +357,8 @@
     </div>
   </div>
 </div>
+
+<div id="mapTooltip"></div>
 
 <script>
 'use strict';
@@ -434,10 +477,13 @@ let _editPin    = null;         // full pin object when editing
 let _cfgRequired = false;
 let _zoom       = 1.0;
 let _drag       = null;         // drag-pan state
+let _measuring    = false;
+let _measureStart = null;       // {x, y} in % coordinates
+let _measureEnd   = null;       // {x, y} in % coordinates
 
 const PIN_ICONS = {
   City: '🏰', Town: '🏘', Dungeon: '💀', Battle: '⚔️',
-  Camp: '⛺', Ruin: '🗿', POI: '📍', Other: '📌',
+  Camp: '⛺', Ruin: '🗿', POI: '📍', Other: '📌', Session: '⭐',
 };
 
 // 6 high-contrast colours chosen against fantasy map terrain
@@ -521,7 +567,7 @@ document.getElementById('mapScroll').addEventListener('wheel', function(e) {
   const scroll = document.getElementById('mapScroll');
 
   scroll.addEventListener('mousedown', e => {
-    if (_placing) return;                          // placing mode owns clicks
+    if (_placing || _measuring) return;             // placing/ruler mode owns clicks
     if (e.button !== 0) return;
     if (e.target.closest('.map-pin')) return;      // let pin clicks be clicks
     e.preventDefault();
@@ -586,6 +632,13 @@ async function init() {
 
 function togglePlace() {
   _placing = !_placing;
+  // Entering place mode clears the ruler
+  if (_placing && _measureStart) {
+    clearRuler();
+    document.getElementById('btnRuler').textContent = '📏';
+    document.getElementById('btnRuler').classList.remove('btn-ruler-active');
+    _measuring = false;
+  }
   document.getElementById('btnPlacePin').textContent = _placing ? 'Cancel' : '+ Place Pin';
   document.getElementById('placeHint').style.display = _placing ? 'inline' : 'none';
   document.getElementById('mapWrap').classList.toggle('placing', _placing);
@@ -593,10 +646,39 @@ function togglePlace() {
 }
 
 document.getElementById('mapWrap').addEventListener('click', function(e) {
-  if (!_placing) return;
-  if (e.target.classList.contains('map-pin')) return;
   const img = document.getElementById('mapImg');
   const r   = img.getBoundingClientRect();
+
+  // ── Ruler mode ──
+  if (_measuring) {
+    if (e.target.closest('.map-pin')) return;
+    const pt = {
+      x: ((e.clientX - r.left) / r.width)  * 100,
+      y: ((e.clientY - r.top)  / r.height) * 100,
+    };
+    if (!_measureStart) {
+      _measureStart = pt;
+      drawRuler();
+      setStatus('Start set. Click to set end point…');
+    } else {
+      _measureEnd = pt;
+      drawRuler();
+      _measuring = false;
+      document.getElementById('btnRuler').textContent = '📏';
+      document.getElementById('btnRuler').classList.remove('btn-ruler-active');
+      const imgEl  = document.getElementById('mapImg');
+      const aspect = (imgEl.naturalHeight || imgEl.offsetHeight) / (imgEl.naturalWidth || imgEl.offsetWidth || 1);
+      const dx     = _measureEnd.x - _measureStart.x;
+      const dy     = (_measureEnd.y - _measureStart.y) * aspect;
+      const dist   = Math.sqrt(dx * dx + dy * dy);
+      setStatus(`Ruler: ~${dist.toFixed(1)}% of map. Click 📏 to clear.`);
+    }
+    return;
+  }
+
+  // ── Place pin mode ──
+  if (!_placing) return;
+  if (e.target.closest('.map-pin')) return;
   _pendingXY = {
     x: ((e.clientX - r.left) / r.width)  * 100,
     y: ((e.clientY - r.top)  / r.height) * 100,
@@ -724,22 +806,205 @@ async function doDeletePin() {
 
 function renderPins() {
   document.getElementById('mapPins').innerHTML = _pins.map(p => {
-    const icon  = PIN_ICONS[p.ptype] || '📌';
-    const color = p.color || DEFAULT_COLOR;
+    const icon      = PIN_ICONS[p.ptype] || '📌';
+    const color     = p.color || DEFAULT_COLOR;
+    const isSession = p.ptype === 'Session';
     return `<div class="map-pin" title="${esc(p.name)}"
       style="left:${p.x}%;top:${p.y}%"
       data-id="${esc(p._id)}"
-    ><div class="pin-bubble" style="background:${esc(color)}">${icon}</div></div>`;
+    ><div class="pin-bubble${isSession ? ' session-pin' : ''}" style="background:${esc(color)}">${icon}</div></div>`;
   }).join('');
 
   document.getElementById('mapPins').querySelectorAll('.map-pin').forEach(el => {
     el.addEventListener('click', e => {
       e.stopPropagation();
-      if (_drag?.moved) return; // swallow click after a drag
+      if (_drag?.moved) return;
       const pin = _pins.find(p => p._id === el.dataset.id);
       if (pin) openPinModal(pin, true);
     });
+    el.addEventListener('mouseenter', e => {
+      const pin = _pins.find(p => p._id === el.dataset.id);
+      if (pin) showTooltip(pin, e);
+    });
+    el.addEventListener('mouseleave', () => hideTooltip());
+    el.addEventListener('mousemove',  e => positionTooltip(e));
   });
+}
+
+// ── Hover Tooltip ─────────────────────────────────────────────────────────────
+
+function showTooltip(pin, e) {
+  const tt    = document.getElementById('mapTooltip');
+  const color = pin.color || DEFAULT_COLOR;
+  const notes = pin.notes ? pin.notes.slice(0, 80) + (pin.notes.length > 80 ? '…' : '') : '';
+  tt.innerHTML =
+    `<div class="tooltip-name"><span class="tooltip-dot" style="background:${esc(color)}"></span>${esc(pin.name)}</div>` +
+    `<div class="tooltip-type">${esc(pin.ptype)}</div>` +
+    (notes ? `<div class="tooltip-notes">${esc(notes)}</div>` : '');
+  tt.style.left = '-9999px';
+  tt.style.top  = '-9999px';
+  tt.classList.add('visible');
+  positionTooltip(e);
+}
+
+function positionTooltip(e) {
+  const tt  = document.getElementById('mapTooltip');
+  if (!tt.classList.contains('visible')) return;
+  const m   = 14;
+  const ttW = tt.offsetWidth;
+  const ttH = tt.offsetHeight;
+  let left  = e.clientX + m;
+  let top   = e.clientY - ttH / 2;
+  if (left + ttW > window.innerWidth  - m) left = e.clientX - ttW - m;
+  if (left < m)                             left = m;
+  if (top  < m)                             top  = m;
+  if (top  + ttH > window.innerHeight - m)  top  = window.innerHeight - ttH - m;
+  tt.style.left = left + 'px';
+  tt.style.top  = top  + 'px';
+}
+
+function hideTooltip() {
+  document.getElementById('mapTooltip').classList.remove('visible');
+}
+
+// ── Distance Ruler ────────────────────────────────────────────────────────────
+
+function toggleRuler() {
+  _measuring = !_measuring;
+  const btn = document.getElementById('btnRuler');
+  if (_measuring) {
+    _measureStart = null;
+    _measureEnd   = null;
+    btn.textContent = '✕ Ruler';
+    btn.classList.add('btn-ruler-active');
+    setStatus('Click to set ruler start point…');
+  } else {
+    btn.textContent = '📏';
+    btn.classList.remove('btn-ruler-active');
+    clearRuler();
+    setStatus(`${_pins.length} pin${_pins.length !== 1 ? 's' : ''} loaded.`, 'ok');
+  }
+}
+
+function clearRuler() {
+  _measureStart = null;
+  _measureEnd   = null;
+  const svg = document.getElementById('rulerSvg');
+  svg.style.display = 'none';
+  svg.innerHTML = '';
+}
+
+function drawRuler() {
+  if (!_measureStart) return;
+  const svg  = document.getElementById('rulerSvg');
+  svg.style.display = '';
+  const s    = _measureStart;
+  const e    = _measureEnd || s;
+  const img  = document.getElementById('mapImg');
+  const imgW = img.naturalWidth  || img.offsetWidth  || 1;
+  const imgH = img.naturalHeight || img.offsetHeight || 1;
+  const aspect = imgH / imgW;
+  const dx   = e.x - s.x;
+  const dy   = (e.y - s.y) * aspect;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const label = `~${dist.toFixed(1)}% of map`;
+  const midX = (s.x + e.x) / 2;
+  const midY = (s.y + e.y) / 2;
+  svg.innerHTML =
+    `<line x1="${s.x}" y1="${s.y}" x2="${e.x}" y2="${e.y}"
+           stroke="#F59E0B" stroke-width="0.4" stroke-dasharray="1.2,0.8" stroke-linecap="round"/>
+     <circle cx="${s.x}" cy="${s.y}" r="0.8" fill="#F59E0B"/>
+     <circle cx="${e.x}" cy="${e.y}" r="0.8" fill="#F59E0B"/>
+     <text x="${midX}" y="${midY - 1.5}"
+           fill="#F59E0B" font-size="2.4" text-anchor="middle" dominant-baseline="auto"
+           style="font-family:sans-serif;font-weight:bold;
+                  paint-order:stroke;stroke:#000;stroke-width:0.8;stroke-linejoin:round"
+     >${esc(label)}</text>`;
+}
+
+// ── Export PNG ────────────────────────────────────────────────────────────────
+
+async function exportPNG() {
+  const mapImg = document.getElementById('mapImg');
+  setStatus('<span class="spinner"></span>Exporting PNG…');
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  await new Promise((resolve) => {
+    img.onload  = resolve;
+    img.onerror = resolve; // proceed even on error; canvas will be blank-bg
+    img.src = mapImg.src + (mapImg.src.includes('?') ? '&' : '?') + '_cb=' + Date.now();
+  });
+
+  const W = img.naturalWidth  || mapImg.naturalWidth  || 900;
+  const H = img.naturalHeight || mapImg.naturalHeight || 600;
+  const canvas = document.createElement('canvas');
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  if (img.naturalWidth) ctx.drawImage(img, 0, 0, W, H);
+
+  // Draw pins
+  for (const p of _pins) {
+    const cx = (p.x / 100) * W;
+    const cy = (p.y / 100) * H;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 17, 0, Math.PI * 2);
+    ctx.fillStyle = p.color || DEFAULT_COLOR;
+    ctx.fill();
+    ctx.lineWidth   = 2.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.stroke();
+    ctx.font         = '16px serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle    = '#ffffff';
+    ctx.fillText(PIN_ICONS[p.ptype] || '📌', cx, cy);
+  }
+
+  // Draw ruler if complete
+  if (_measureStart && _measureEnd) {
+    const sx = (_measureStart.x / 100) * W;
+    const sy = (_measureStart.y / 100) * H;
+    const ex = (_measureEnd.x   / 100) * W;
+    const ey = (_measureEnd.y   / 100) * H;
+    ctx.save();
+    ctx.setLineDash([8, 5]);
+    ctx.lineWidth   = 2;
+    ctx.strokeStyle = '#F59E0B';
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.setLineDash([]);
+    for (const [px, py] of [[sx, sy], [ex, ey]]) {
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#F59E0B'; ctx.fill();
+    }
+    const aspect = H / W;
+    const dx   = _measureEnd.x - _measureStart.x;
+    const dy   = (_measureEnd.y - _measureStart.y) * aspect;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const midX = (sx + ex) / 2;
+    const midY = (sy + ey) / 2 - 14;
+    ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#000'; ctx.fillText(`~${dist.toFixed(1)}% of map`, midX + 1, midY + 1);
+    ctx.fillStyle = '#F59E0B'; ctx.fillText(`~${dist.toFixed(1)}% of map`, midX, midY);
+    ctx.restore();
+  }
+
+  try {
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const a = document.createElement('a');
+    a.download = `lieberung-map-${dateStr}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+    setStatus('Map exported.', 'ok');
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'SecurityError') {
+      setStatus('Export failed: image server does not allow cross-origin canvas reads.', 'err');
+    } else {
+      setStatus('Export failed: ' + esc(err.message), 'err');
+    }
+  }
 }
 
 // ── Config Modal ──────────────────────────────────────────────────────────────
